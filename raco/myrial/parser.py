@@ -409,6 +409,13 @@ class Parser(object):
         p[0] = p[1] or []
 
     @staticmethod
+    def p_recursion_mode(p):
+        """recursion_mode : SYNC
+                          | ASYNC
+                          | empty"""
+        p[0] = p[1] or []
+
+    @staticmethod
     def p_function_arg_list(p):
         """function_arg_list : function_arg_list COMMA unreserved_id
                              | unreserved_id"""
@@ -470,6 +477,12 @@ class Parser(object):
         p[0] = ('ASSIGN', p[1], p[3])
 
     @staticmethod
+    def p_statement_idbassign(p):
+        'statement : unreserved_id COLON EQUALS LBRACKET emit_arg_list \
+            RBRACKET LARROW rvalue SEMI'
+        p[0] = ('IDBASSIGN', p[1], p[5], p[8])
+
+    @staticmethod
     def p_statement_empty(p):
         'statement : SEMI'
         p[0] = None  # stripped out by parse
@@ -495,6 +508,11 @@ class Parser(object):
     def p_statement_dowhile(p):
         'statement : DO statement_list WHILE expression SEMI'
         p[0] = ('DOWHILE', p[2], p[4])
+
+    @staticmethod
+    def p_statement_dountilconvergence(p):
+        'statement : DO statement_list UNTIL CONVERGENCE recursion_mode SEMI'
+        p[0] = ('UNTILCONVERGENCE', p[2], p[5])
 
     @staticmethod
     def p_statement_store(p):

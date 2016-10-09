@@ -381,6 +381,146 @@ class NaryJoin(NaryOperator):
 """Logical Relational Algebra"""
 
 
+class ScanIDB(ZeroaryOperator):
+
+    def __init__(self, name, _scheme=None, idbcontroller=None):
+        self.name = name
+        self._scheme = _scheme
+        self.idbcontroller = idbcontroller
+        ZeroaryOperator.__init__(self)
+
+    def partitioning(self):
+        return RepresentationProperties()
+
+    def num_tuples(self):
+        raise NotImplementedError("{op}.num_tuples".format(op=type(self)))
+
+    def shortStr(self):
+        return "%s(%s)" % (self.opname(), self.name)
+
+    def scheme(self):
+        if self._scheme is not None:
+            return self._scheme
+        if self.idbcontroller is not None:
+            return self.idbcontroller.scheme()
+        return None
+
+    def __repr__(self):
+        return "{op}({name!r},{sch!r})".format(
+            op=self.opname(), name=self.name, sch=self.scheme())
+
+
+class IDBController(NaryOperator):
+
+    def __init__(self, name=None, idb_id=None, children=None, emits=None,
+                 relation_key=None, recursion_mode=None):
+        self.name = name
+        self.idb_id = idb_id
+        self.emits = emits
+        self.relation_key = relation_key
+        self.recursion_mode = recursion_mode
+        NaryOperator.__init__(self, children)
+
+    def partitioning(self):
+        return RepresentationProperties()
+
+    def get_agg_json(self):
+        (group_list, expr) = self.get_group_agg()
+        if expr is None:
+            return {"type": "DupElim"}
+        if isinstance(expr,
+                      (expression.aggregate.MIN,
+                       expression.aggregate.MULTIMIN)):
+            if isinstance(expr, expression.aggregate.MIN):
+                valueCols = [expr.input.position]
+            else:
+                valueCols = [operand.position for operand in expr.operands]
+            return {
+                "type": "KeepMinValue",
+                "keyColIndices": group_list,
+                "valueColIndices": valueCols
+            }
+        if isinstance(expr, expression.aggregate.COUNTALL):
+            return {
+                "type": "CountFilter",
+                "keyColIndices": group_list,
+                "threshold": expr.threshold
+            }
+
+    def get_group_agg(self):
+        agg_list = []
+        group_list = []
+        for expr in self.emits:
+            if isinstance(expr, expression.AggregateExpression):
+                if not isinstance(expr, (expression.aggregate.MIN,
+                                         expression.aggregate.MULTIMIN,
+                                         expression.aggregate.COUNTALL)):
+                    raise NotImplementedError(
+                        "IDBController does not support agg type {}".format(
+                            type(expr)))
+                agg_list.append(expr)
+            else:
+                assert isinstance(expr, expression.UnnamedAttributeRef)
+                group_list.append(expr.position)
+        if len(agg_list) > 1:
+            raise NotImplementedError("IDBController only can have one agg")
+        if len(agg_list) == 0:
+            agg = None
+        else:
+            agg = agg_list[0]
+        return (group_list, agg)
+
+    def num_tuples(self):
+        # TODO
+        return DEFAULT_CARDINALITY
+
+    def scheme(self):
+        if self.children()[0] is not None and not \
+                isinstance(self.children()[0], EmptyRelation):
+            return self.children()[0].scheme()
+        if self.children()[1] is not None and not \
+                isinstance(self.children()[1], EmptyRelation):
+            return self.children()[1].scheme()
+        return None
+
+    def shortStr(self):
+        return "%s(%s)" % (self.opname(), real_str(self.name,
+                                                   skip_out=True))
+
+    def copy(self, other):
+        """deep copy"""
+        self.name = other.name
+        self.idb_id = other.idb_id
+        self.emits = other.emits
+        self.recursion_mode = other.recursion_mode
+        NaryOperator.copy(self, other)
+
+    def __repr__(self):
+        return "{op}({name!r},{id!r},{ch!r},{em!r},{key!r},{recur!r})".format(
+            op=self.opname(), name=self.name, id=self.idb_id, ch=self.args,
+            em=self.emits, key=self.relation_key, recur=self.recursion_mode)
+
+
+class EOSController(UnaryOperator):
+
+    """EOSController"""
+
+    def __init__(self, input=None):
+        UnaryOperator.__init__(self, input)
+
+    def partitioning(self):
+        return RepresentationProperties()
+
+    def num_tuples(self):
+        return 1
+
+    def scheme(self):
+        return scheme.Scheme([])
+
+    def shortStr(self):
+        return "%s" % (self.opname())
+
+
 class IdenticalSchemeBinaryOperator(BinaryOperator):
 
     """BinaryOperator where both sides have the same schema"""
@@ -1794,6 +1934,28 @@ class DoWhile(NaryOperator):
 
     def scheme(self):
         """DoWhile does not return any tuples."""
+        return None
+
+
+class UntilConvergence(NaryOperator):
+
+    def __init__(self, ops=None):
+        """Repeatedly execute a sequence of plans until convergence.
+        :params ops: A list of operations to execute in parallel.
+        """
+        NaryOperator.__init__(self, ops)
+
+    def partitioning(self):
+        return RepresentationProperties()
+
+    def num_tuples(self):
+        raise NotImplementedError("{op}.num_tuples".format(op=type(self)))
+
+    def shortStr(self):
+        return self.opname()
+
+    def scheme(self):
+        """UntilConvergence does not return any tuples."""
         return None
 
 

@@ -413,8 +413,38 @@ class MyriaSymmetricHashJoin(algebra.ProjectingJoin, MyriaOperator):
             "argSelect1": allleft,
             "argSelect2": allright
         }
+        if hasattr(self, 'pull_order') and self.pull_order is not None:
+            join.update({"argOrder": self.pull_order})
 
         return join
+
+
+class MyriaIDBController(algebra.IDBController, MyriaOperator):
+
+    def compileme(self, *args):
+        ret = {
+            "opType": "IDBController",
+            "argSelfIdbId": "%s" % self.idb_id,
+            "argInitialInput": "%s" % args[0],
+            "argIterationInput": "%s" % args[1],
+            "argEosControllerInput": "%s" % args[2],
+            "argState": self.get_agg_json(),
+            "sync": self.recursion_mode == "SYNC"
+        }
+        if self.relation_key is not None:
+            ret.update({
+                "relationKey": relation_key_to_json(self.relation_key),
+            })
+        return ret
+
+
+class MyriaEOSController(algebra.EOSController, MyriaOperator):
+
+    def compileme(self, input):
+        return {
+            "opType": "EOSController",
+            "argChild": "%s" % input
+        }
 
 
 class MyriaLeapFrogJoin(algebra.NaryJoin, MyriaOperator):
@@ -687,6 +717,10 @@ class MyriaSplitConsumer(algebra.UnaryOperator, MyriaOperator):
     """A Myria SplitConsumer"""
 
     def __init__(self, input):
+        assert isinstance(input, MyriaSplitProducer)
+        if not hasattr(input, 'consumers'):
+            input.consumers = []
+        input.consumers.append(self)
         algebra.UnaryOperator.__init__(self, input)
 
     def num_tuples(self):
@@ -760,11 +794,15 @@ class MyriaShuffleProducer(algebra.UnaryOperator, MyriaOperator):
         else:
             raise ValueError("Invalid ShuffleType")
 
-        return {
+        ret = {
             "opType": "ShuffleProducer",
             "argChild": inputid,
             "argPf": pf
         }
+        if hasattr(self, 'buffer_type') and self.buffer_type != "None":
+            ret.update({"argBufferStateType": self.buffer_type})
+
+        return ret
 
 
 class MyriaShuffleConsumer(algebra.UnaryOperator, MyriaOperator):
@@ -786,6 +824,53 @@ class MyriaShuffleConsumer(algebra.UnaryOperator, MyriaOperator):
     def compileme(self, inputid):
         return {
             'opType': 'ShuffleConsumer',
+            'argOperatorId': inputid
+        }
+
+
+class MyriaConsumer(algebra.ZeroaryOperator, MyriaOperator):
+
+    """A Myria Consumer"""
+
+    def __init__(self, _scheme=None, producer=None):
+        self._scheme = _scheme
+        self.producer = producer
+        if producer is not None and isinstance(producer, MyriaSplitProducer):
+            if not hasattr(producer, 'consumers'):
+                producer.consumers = []
+            producer.consumers.append(self)
+        algebra.ZeroaryOperator.__init__(self)
+
+    def __repr__(self):
+        return "{op}({sch!r})".format(
+            op=self.opname(), sch=self.scheme())
+
+    def partitioning(self):
+        return self.producer.partitioning()
+
+    def num_tuples(self):
+        return self.producer.num_tuples()
+
+    def shortStr(self):
+        return "%s(%s)" % (self.opname(), self.scheme())
+
+    def scheme(self):
+        if self._scheme is not None:
+            return self._scheme
+        if self.producer is not None and isinstance(
+                self.producer, (MyriaSplitProducer, MyriaShuffleProducer)):
+            return self.producer.scheme()
+        return None
+
+    def compileme(self, inputid):
+        if isinstance(self.producer, MyriaSplitProducer):
+            consumer = 'LocalMultiwayConsumer'
+        elif isinstance(self.producer, MyriaShuffleProducer):
+            consumer = 'ShuffleConsumer'
+        else:
+            consumer = 'Consumer'
+        return {
+            'opType': consumer,
             'argOperatorId': inputid
         }
 
@@ -1216,6 +1301,22 @@ class ShuffleBeforeJoin(rules.Rule):
         return "Join => Shuffle(Join)"
 
 
+class ShuffleBeforeIDBController(rules.Rule):
+    def fire(self, expr):
+        # If not a join, who cares?
+        if not isinstance(expr, algebra.IDBController):
+            return expr
+        (group_list, agg) = expr.get_group_agg()
+
+        for idx in range(0, 2):
+            if not isinstance(expr.children()[idx],
+                              (algebra.Shuffle, algebra.EmptyRelation)):
+                expr.args[idx] = algebra.Shuffle(
+                    expr.children()[idx],
+                    [expression.UnnamedAttributeRef(i) for i in group_list])
+        return expr
+
+
 class HCShuffleBeforeNaryJoin(rules.Rule):
 
     def __init__(self, catalog):
@@ -1639,6 +1740,7 @@ class GetCardinalities(rules.Rule):
 left_deep_tree_shuffle_logic = [
     ShuffleBeforeSetop(),
     ShuffleBeforeJoin(),
+    ShuffleBeforeIDBController(),
     BroadcastBeforeCross(),
     ShuffleAfterSingleton(),
     CollectBeforeLimit(),
@@ -1669,6 +1771,7 @@ myriafy = [
     rules.OneToOne(algebra.Difference, MyriaDifference),
     rules.OneToOne(algebra.OrderBy, MyriaInMemoryOrderBy),
     rules.OneToOne(algebra.Sink, MyriaSink),
+    rules.OneToOne(algebra.IDBController, MyriaIDBController),
 ]
 
 # 9. break communication boundary
@@ -1721,6 +1824,193 @@ class FlattenUnionAll(rules.Rule):
         return algebra.UnionAll(children)
 
 
+class FillInJoinPullOrder(rules.Rule):
+
+    def __init__(self, pull_order):
+        self._disabled = False
+        self.pull_order = pull_order
+
+    def fire(self, op):
+        if not isinstance(op, MyriaSymmetricHashJoin):
+            return op
+        op.pull_order = self.pull_order
+        return op
+
+
+class PropagateAsyncFTBuffer(rules.Rule):
+
+    def __init__(self):
+        self._disabled = False
+
+    def fire(self, op):
+        if not isinstance(op, MyriaIDBController):
+            return op
+        buffer_type = op.get_agg_json()
+        if buffer_type['type'] == "CountFilter":
+            # do not propagate CountFilter
+            return op
+        # only do it for the iterative input
+        if isinstance(op.args[1], MyriaShuffleConsumer):
+            op.args[1].input.buffer_type = buffer_type
+        return op
+
+
+class ReplaceStoreIDB(rules.Rule):
+
+    @staticmethod
+    def collect_and_replace(op, idbproducers):
+        if not isinstance(op, algebra.NaryOperator):
+            return
+        if isinstance(op, algebra.UntilConvergence):
+            for idbproducer in op.children():
+                if isinstance(idbproducer.input, MyriaIDBController):
+                    idbproducers[idbproducer.input.name] = idbproducer
+            return
+        newchildren = []
+        for child in op.children():
+            if isinstance(child, algebra.UntilConvergence):
+                ReplaceStoreIDB.collect_and_replace(child, idbproducers)
+            if isinstance(child, algebra.Store) and \
+                    isinstance(child.input, algebra.ScanIDB):
+                assert child.input.name in idbproducers
+                idbproducers[child.input.name].input.relation_key = \
+                    child.relation_key
+            else:
+                newchildren.append(child)
+        op.args = newchildren
+
+    def fire(self, op):
+        self.collect_and_replace(op, {})
+        return op
+
+
+class RemoveEmptyFilter(rules.Rule):
+
+    def fire(self, expr):
+        for idx, op in enumerate(expr.children()):
+            if isinstance(op, algebra.Select) and op.condition is None:
+                child = op.children()[0]
+                if isinstance(expr, algebra.UnaryOperator):
+                    expr.input = child
+                elif isinstance(expr, algebra.BinaryOperator):
+                    if idx == 0:
+                        expr.left = child
+                    else:
+                        expr.right = child
+                elif isinstance(expr, algebra.NaryOperator):
+                    expr.args[idx] = child
+        return expr
+
+
+class RemoveSingleSplit(rules.Rule):
+
+    def fire(self, op):
+        if not isinstance(op, algebra.UntilConvergence):
+            return op
+
+        parent_map = {}
+        op.collectParents(parent_map)
+        for idx, child in enumerate(op.children()):
+            if not isinstance(child, MyriaSplitProducer):
+                continue
+            if len(child.consumers) != 1:
+                continue
+            producer = parent_map[id(child.consumers[0])][0]
+            if not isinstance(producer, MyriaShuffleProducer):
+                continue
+            producer.input = child.input
+            consumer = parent_map[id(producer)][0]
+            upper_op = parent_map[id(consumer)][0]
+            new_consumer = MyriaConsumer(None, producer)
+            if isinstance(upper_op, algebra.UnaryOperator):
+                upper_op.input = new_consumer
+            elif isinstance(upper_op, algebra.BinaryOperator):
+                if upper_op.left == parent_map[id(producer)][0]:
+                    upper_op.left = new_consumer
+                else:
+                    upper_op.right = new_consumer
+            else:
+                for idx, t in enumerate(upper_op.args):
+                    if upper_op.args[idx] == parent_map[id(producer)][0]:
+                        upper_op.args[idx] = new_consumer
+                        break
+            op.args[idx] = producer
+        return op
+
+
+class DoUntilConvergence(rules.Rule):
+
+    @staticmethod
+    def replace_scan_with_idb_consumer(expr, idb_controllers, idb_producers):
+        if isinstance(expr, algebra.ZeroaryOperator):
+            return
+        for idx, op in enumerate(expr.children()):
+            if isinstance(op, algebra.ScanIDB):
+                if op.name not in idb_producers:
+                    idb_producers[op.name] = \
+                        MyriaSplitProducer(idb_controllers[op.name])
+                consumer = MyriaConsumer(None, idb_producers[op.name])
+                if isinstance(expr, algebra.UnaryOperator):
+                    expr.input = consumer
+                elif isinstance(expr, algebra.BinaryOperator):
+                    if idx == 0:
+                        expr.left = consumer
+                    else:
+                        expr.right = consumer
+                elif isinstance(expr, algebra.NaryOperator):
+                    expr.args[idx] = consumer
+                if isinstance(expr, algebra.Select) and \
+                        isinstance(expr.condition, expression.boolean.GTEQ):
+                    (group_list, agg) = \
+                        idb_controllers[op.name].get_group_agg()
+                    if isinstance(agg, expression.aggregate.COUNTALL):
+                        agg.threshold = expr.condition.right.value
+                        expr.condition = None
+            else:
+                DoUntilConvergence.replace_scan_with_idb_consumer(
+                    op, idb_controllers, idb_producers)
+
+    def fire(self, op):
+        if not isinstance(op, algebra.UntilConvergence):
+            return op
+        if hasattr(op, "has_been_transformed"):
+            if op.has_been_transformed:
+                return op
+
+        eos_controller = MyriaEOSController()
+        eos_consumers = []
+        idb_controllers = {}
+        for idb_controller in op.args:
+            idb_controller.children()[2] = MyriaConsumer(None, eos_controller)
+            eos_consumers.append(MyriaConsumer(None, idb_controller))
+            idb_controllers[idb_controller.name] = idb_controller
+        if len(eos_consumers) == 1:
+            eos_controller.input = eos_consumers[0]
+        else:
+            eos_controller.input = MyriaUnionAll(eos_consumers)
+
+        idb_producers = {}
+        for idb_controller in op.args:
+            self.replace_scan_with_idb_consumer(
+                idb_controller, idb_controllers, idb_producers)
+        new_statements = [eos_controller]
+        for idb_controller in op.args:
+            if idb_controller.name in idb_producers:
+                producer = idb_producers[idb_controller.name]
+                producer.idx = len(new_statements)
+                producer.parent = op
+                new_statements.append(producer)
+            else:
+                new_statements.append(MyriaSink(idb_controller))
+        op.args = new_statements
+
+        op.has_been_transformed = True
+        return op
+
+    def __str__(self):
+        return ("DoUntilConvergence")
+
+
 class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
 
     """Myria physical algebra using left deep tree pipeline and 1-D shuffle"""
@@ -1753,6 +2043,7 @@ class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
 
         compile_grps_sequence = [
             myriafy,
+            [DoUntilConvergence(), RemoveEmptyFilter(), ReplaceStoreIDB()],
             [AddAppendTemp()],
             break_communication
         ]
@@ -1762,6 +2053,13 @@ class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
         # Even when false, plans may already include (manually added) Splits,
         # so we always need BreakSplit
         compile_grps_sequence.append([BreakSplit()])
+        compile_grps_sequence.append([RemoveSingleSplit()])
+
+        if kwargs.get('join_pull_order'):
+            compile_grps_sequence.append(
+                [FillInJoinPullOrder(kwargs.get('join_pull_order'))])
+        if kwargs.get('async_ft'):
+            compile_grps_sequence.append([PropagateAsyncFTBuffer()])
 
         rule_grps_sequence = opt_grps_sequence + compile_grps_sequence
 
@@ -1925,7 +2223,10 @@ def compile_fragment(frag_root):
     def call_compile_me(op):
         "A shortcut to call the operator's compile_me function."
         op_id = op_ids[id(op)]
-        child_op_ids = [op_ids[id(child)] for child in op.children()]
+        if isinstance(op, MyriaConsumer):
+            child_op_ids = [op_ids[id(op.producer)]]
+        else:
+            child_op_ids = [op_ids[id(child)] for child in op.children()]
         op_dict = op.compileme(*child_op_ids)
         op_dict['opName'] = op.shortStr()
         assert isinstance(op_id, int), (type(op_id), op_id)
@@ -1938,11 +2239,12 @@ def compile_fragment(frag_root):
 
 
 def compile_plan(plan_op):
-    """Given a root operator in the Myria backend (MyriaX?) physical algebra,
+    """Given a root operator in MyriaX physical algebra,
     produce the dictionary encoding of the physical plan, in other words, a
     nested collection of Java QueryPlan operators."""
 
-    subplan_ops = (algebra.Parallel, algebra.Sequence, algebra.DoWhile)
+    subplan_ops = (algebra.Parallel, algebra.Sequence, algebra.DoWhile,
+                   algebra.UntilConvergence)
     if not isinstance(plan_op, subplan_ops):
         plan_op = algebra.Parallel([plan_op])
 
@@ -1970,6 +2272,11 @@ def compile_plan(plan_op):
                 "body": body,
                 "condition": condition.name}
 
+    elif isinstance(plan_op, algebra.UntilConvergence):
+        frag_list = [compile_fragment(op) for op in plan_op.children()]
+        return {"type": "SubQuery",
+                "fragments": list(itertools.chain(*frag_list))}
+
     raise NotImplementedError("compiling subplan op {}".format(type(plan_op)))
 
 
@@ -1984,7 +2291,8 @@ def compile_to_json(raw_query, logical_plan, physical_plan,
     if isinstance(physical_plan, root_ops):
         physical_plan = algebra.Parallel([physical_plan])
 
-    subplan_ops = (algebra.Parallel, algebra.Sequence, algebra.DoWhile)
+    subplan_ops = (algebra.Parallel, algebra.Sequence, algebra.DoWhile,
+                   algebra.UntilConvergence)
     assert isinstance(physical_plan, subplan_ops), \
         'Physical plan must be a subplan operator, not {}'.format(type(physical_plan))  # noqa
 

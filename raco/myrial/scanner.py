@@ -7,7 +7,8 @@ import raco.myrial.exceptions
 
 keywords = ['WHILE', 'DO', 'DEF', 'APPLY', 'CASE', 'WHEN', 'THEN',
             'ELSE', 'END', 'CONST', 'LOAD', 'DUMP', 'CSV', 'SCHEMA',
-            'OPP', 'TIPSY', 'UDA', 'TRUE', 'FALSE']
+            'OPP', 'TIPSY', 'UDA', 'TRUE', 'FALSE',
+            'UNTIL', 'CONVERGENCE', "SYNC", "ASYNC"]
 
 types = ['INT', 'STRING', 'FLOAT', 'BOOLEAN']
 
@@ -29,7 +30,7 @@ reserved = (keywords + types + comprehension_keywords
 tokens = ['LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET', 'DOT', 'PLUS', 'MINUS',
           'TIMES', 'DIVIDE', 'IDIVIDE', 'MOD', 'LT', 'GT', 'GE', 'GE2',
           'LE', 'LE2', 'EQ', 'NE', 'NE2', 'NE3', 'COMMA', 'SEMI', 'EQUALS',
-          'COLON', 'DOLLAR', 'ID',
+          'COLON', 'DOLLAR', 'ID', 'LARROW',
           'STRING_LITERAL', 'INTEGER_LITERAL', 'FLOAT_LITERAL',
           'LBRACE', 'RBRACE'] + reserved
 
@@ -65,6 +66,7 @@ t_SEMI = r';'
 t_EQUALS = r'='
 t_COLON = r':'
 t_DOLLAR = r'\$'
+t_LARROW = r'<-'
 
 # Regular expressions for non-trivial tokens
 
