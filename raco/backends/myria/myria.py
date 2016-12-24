@@ -1869,8 +1869,7 @@ def compile_fragment(frag_root):
     # A dictionary mapping each object to a unique, object-dependent id.
     # Since we want this to be truly unique for each object instance, even if
     # two objects are equal, we use id(obj) as the key.
-    opid_factory = OpIdFactory()
-    op_ids = defaultdict(opid_factory.getter())
+    op_ids = defaultdict(OpIdFactory().getter())
 
     def one_fragment(rootOp):
         """Given an operator that is the root of a query fragment/plan, extract

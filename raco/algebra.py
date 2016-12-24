@@ -104,7 +104,7 @@ class Operator(Printable):
         if parent_map is None:
             parent_map = {}
         for c in self.children():
-            parent_map.setdefault(c, []).append(self)
+            parent_map.setdefault(id(c), []).append(self)
             c.collectParents(parent_map)
 
     def __copy__(self):
