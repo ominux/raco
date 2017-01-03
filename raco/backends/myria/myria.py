@@ -2058,7 +2058,7 @@ class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
         if kwargs.get('join_pull_order'):
             compile_grps_sequence.append(
                 [FillInJoinPullOrder(kwargs.get('join_pull_order'))])
-        if kwargs.get('async_ft'):
+        if kwargs.get('async_ft') is not None:
             compile_grps_sequence.append([PropagateAsyncFTBuffer()])
 
         rule_grps_sequence = opt_grps_sequence + compile_grps_sequence
@@ -2281,7 +2281,7 @@ def compile_plan(plan_op):
 
 
 def compile_to_json(raw_query, logical_plan, physical_plan,
-                    language="not specified"):
+                    language="not specified", **kwargs):
     """This function compiles a physical query plan to the JSON suitable for
     submission to the Myria REST API server. The logical plan is converted to a
     string and passed along unchanged."""
@@ -2299,7 +2299,7 @@ def compile_to_json(raw_query, logical_plan, physical_plan,
     # raw_query must be a string
     if not isinstance(raw_query, basestring):
         raise ValueError("raw query must be a string")
-    return {"rawQuery": raw_query,
-            "logicalRa": str(logical_plan),
-            "language": language,
-            "plan": compile_plan(physical_plan)}
+
+    return {"rawQuery": raw_query, "logicalRa": str(logical_plan),
+            "language": language, "plan": compile_plan(physical_plan),
+            "ftMode": kwargs.get('async_ft')}
