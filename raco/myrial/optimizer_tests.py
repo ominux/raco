@@ -1186,3 +1186,101 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         pp = self.logical_to_physical(lp)
         # should be UNIONALL([expr_1, expr_2, expr_3])
         self.assertEquals(self.get_count(pp, MyriaUnionAll), 1)
+
+    def list_ops_in_json(self, plan, type):
+        ops = []
+        for p in plan['plan']['plans']:
+            for frag in p['fragments']:
+                for op in frag['operators']:
+                    if op['opType'] == type:
+                        ops.append(op)
+        return ops
+
+    def test_cc(self):
+        """Test Connected Components"""
+        query = """
+        E = scan(public:adhoc:Z);
+        V = select distinct E.$0 from E;
+        do
+            CC := [$0, MIN($1)] <- [from V emit V.$0 as x, V.$0 as y] +
+                    [from E, CC where E.$0 = CC.$0 emit E.$1, CC.$1];
+        until convergence;
+        store(CC, CC);
+        """
+        lp = self.get_logical_plan(query, async_ft='REJOIN')
+        pp = self.logical_to_physical(lp, async_ft='REJOIN')
+        plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
+
+        self.assertEquals(plan['ftMode'], 'REJOIN')
+        idbs = self.list_ops_in_json(plan, 'IDBController')
+        self.assertEquals(len(idbs), 1)
+        self.assertEquals(idbs[0]['argState']['type'], 'KeepMinValue')
+        self.assertEquals(idbs[0]['sync'], False)  # default value: async
+        sps = self.list_ops_in_json(plan, 'ShuffleProducer')
+        found = False
+        for sp in sps:
+            if 'argBufferStateType' in sp and \
+                    sp['argBufferStateType']['type'] == 'KeepMinValue':
+                found = True
+        assert(found)
+
+    def test_lca(self):
+        """Test LCA"""
+        query = """
+        Cite = scan(public:adhoc:X);
+        Paper = scan(public:adhoc:Y);
+        do
+        Ancestor := [$0,$1,MIN($2)] <- [from Cite emit $0, $1, 1] +
+                [from Ancestor, Cite
+                 where Ancestor.$1 = Cite.$0
+                 emit Ancestor.$0, Cite.$1, Ancestor.$2+1];
+        LCA := [$0,$1,MULTIMIN($2,$3,$4)] <-
+                [from Ancestor as A1, Ancestor as A2, Paper
+                 where A1.$1 = A2.$1 and A1.$1 = Paper.$0 and A1.$0 < A2.$0
+                 emit A1.$0 as pid1, A2.$0 as pid2, greater(A1.$2, A2.$2),
+                 Paper.$1, A1.$1 as aid];
+        until convergence sync;
+        store(LCA, LCA);
+        """
+        lp = self.get_logical_plan(query, async_ft='REJOIN')
+        pp = self.logical_to_physical(lp, async_ft='REJOIN')
+        plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
+
+        idbs = self.list_ops_in_json(plan, 'IDBController')
+        self.assertEquals(len(idbs), 2)
+        self.assertEquals(idbs[0]['argState']['type'], 'KeepMinValue')
+        self.assertEquals(idbs[1]['argState']['type'], 'KeepMinValue')
+        self.assertEquals(len(idbs[1]['argState']['valueColIndices']), 3)
+        self.assertEquals(idbs[0]['sync'], True)
+        self.assertEquals(idbs[1]['sync'], True)
+
+    def test_galaxy_evolution(self):
+        """Test Galaxy Evolution"""
+        query = """
+        GoI = scan(public:adhoc:X);
+        Particles = scan(public:adhoc:Y);
+        do
+        Edges := [$0,$1,$2,COUNT(*)] <-
+                [from Particles as P1, Particles as P2, Galaxies
+                where P1.$0 = P2.$0 and P1.$2+1 = P2.$2 and
+                        P1.$2 = Galaxies.$0 and Galaxies.$1 = P1.$1
+                emit P1.$2 as time, P1.$1 as gid1, P2.$1 as gid2, P1.$0];
+        Galaxies := [$0, $1] <-
+          [from GoI emit 1, GoI.$0] +
+          [from Galaxies, Edges
+           where Galaxies.$0 = Edges.$0 and
+           Galaxies.$1 = Edges.$1 and Edges.$3 >= 4
+           emit Galaxies.$0+1, Edges.$2];
+        until convergence async;
+        store(Galaxies, Galaxies);
+        """
+        lp = self.get_logical_plan(query, async_ft='REJOIN')
+        pp = self.logical_to_physical(lp, async_ft='REJOIN')
+        plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
+
+        idbs = self.list_ops_in_json(plan, 'IDBController')
+        self.assertEquals(len(idbs), 2)
+        self.assertEquals(idbs[0]['argState']['type'], 'CountFilter')
+        self.assertEquals(idbs[1]['argState']['type'], 'DupElim')
+        self.assertEquals(idbs[0]['sync'], False)
+        self.assertEquals(idbs[1]['sync'], False)
