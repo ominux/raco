@@ -12,7 +12,7 @@ from raco.expression import aggregate
 from raco.backends.myria import (
     MyriaShuffleConsumer, MyriaShuffleProducer, MyriaHyperShuffleProducer,
     MyriaBroadcastConsumer, MyriaQueryScan, MyriaSplitConsumer, MyriaUnionAll,
-    MyriaDupElim, MyriaGroupBy)
+    MyriaDupElim, MyriaGroupBy, compile_to_json)
 from raco.backends.myria import (MyriaLeftDeepTreeAlgebra,
                                  MyriaHyperCubeAlgebra)
 from raco.compile import optimize
@@ -28,53 +28,35 @@ class OptimizerTest(myrial_test.MyrialTestCase):
 
     x_scheme = scheme.Scheme([("a", types.LONG_TYPE), ("b", types.LONG_TYPE), ("c", types.LONG_TYPE)])  # noqa
     y_scheme = scheme.Scheme([("d", types.LONG_TYPE), ("e", types.LONG_TYPE), ("f", types.LONG_TYPE)])  # noqa
+    z_scheme = scheme.Scheme([('src', types.LONG_TYPE), ('dst', types.LONG_TYPE)])  # noqa
     part_scheme = scheme.Scheme([("g", types.LONG_TYPE), ("h", types.LONG_TYPE), ("i", types.LONG_TYPE)])  # noqa
     x_key = relation_key.RelationKey.from_string("public:adhoc:X")
     y_key = relation_key.RelationKey.from_string("public:adhoc:Y")
+    z_key = relation_key.RelationKey.from_string("public:adhoc:Z")
     part_key = relation_key.RelationKey.from_string("public:adhoc:part")
     part_partition = RepresentationProperties(
         hash_partitioned=frozenset([AttIndex(1)]))
+    random.seed(387)  # make results deterministic
+    rng = 20
+    count = 30
+    z_data = collections.Counter([(1, 2), (2, 3), (1, 2), (3, 4)])
+    x_data = collections.Counter(
+        [(random.randrange(rng), random.randrange(rng),
+          random.randrange(rng)) for _ in range(count)])
+    y_data = collections.Counter(
+        [(random.randrange(rng), random.randrange(rng),
+          random.randrange(rng)) for _ in range(count)])
+    part_data = collections.Counter(
+        [(random.randrange(rng), random.randrange(rng),
+          random.randrange(rng)) for _ in range(count)])
 
     def setUp(self):
         super(OptimizerTest, self).setUp()
-
-        random.seed(387)  # make results deterministic
-        rng = 20
-        count = 30
-        self.x_data = collections.Counter(
-            [(random.randrange(rng), random.randrange(rng),
-              random.randrange(rng)) for _ in range(count)])
-        self.y_data = collections.Counter(
-            [(random.randrange(rng), random.randrange(rng),
-              random.randrange(rng)) for _ in range(count)])
-        self.part_data = collections.Counter(
-            [(random.randrange(rng), random.randrange(rng),
-              random.randrange(rng)) for _ in range(count)])
-
-        self.db.ingest(OptimizerTest.x_key,
-                       self.x_data,
-                       OptimizerTest.x_scheme)
-        self.db.ingest(OptimizerTest.y_key,
-                       self.y_data,
-                       OptimizerTest.y_scheme)
-        self.db.ingest(OptimizerTest.part_key,
-                       self.part_data,
-                       OptimizerTest.part_scheme,
+        self.db.ingest(self.x_key, self.x_data, self.x_scheme)
+        self.db.ingest(self.y_key, self.y_data, self.y_scheme)
+        self.db.ingest(self.z_key, self.z_data, self.z_scheme)
+        self.db.ingest(self.part_key, self.part_data, self.part_scheme,
                        self.part_partition)  # "partitioned" table
-
-        self.expected = collections.Counter(
-            [(a, b, c, d, e, f) for (a, b, c) in self.x_data
-             for (d, e, f) in self.y_data if a > b and e <= f and c == d])
-
-        self.z_key = relation_key.RelationKey.from_string("public:adhoc:Z")
-        self.z_data = collections.Counter([(1, 2), (2, 3), (1, 2), (3, 4)])
-        self.z_scheme = scheme.Scheme([('src', types.LONG_TYPE), ('dst', types.LONG_TYPE)])  # noqa
-        self.db.ingest('public:adhoc:Z', self.z_data, self.z_scheme)
-
-        self.expected2 = collections.Counter(
-            [(s1, d3) for (s1, d1) in self.z_data.elements()
-             for (s2, d2) in self.z_data.elements()
-             for (s3, d3) in self.z_data.elements() if d1 == s2 and d2 == s3])
 
     @staticmethod
     def logical_to_physical(lp, **kwargs):
@@ -125,7 +107,10 @@ class OptimizerTest(myrial_test.MyrialTestCase):
 
         self.db.evaluate(pp)
         result = self.db.get_temp_table('OUTPUT')
-        self.assertEquals(result, self.expected)
+        expected = collections.Counter(
+            [(a, b, c, d, e, f) for (a, b, c) in self.x_data
+             for (d, e, f) in self.y_data if a > b and e <= f and c == d])
+        self.assertEquals(result, expected)
 
     def test_collapse_applies(self):
         """Test pushing applies together."""
@@ -200,7 +185,6 @@ class OptimizerTest(myrial_test.MyrialTestCase):
              for (a, b, c) in self.x_data
              for (d, e, f) in self.x_data
              if a == d])
-
         self.db.evaluate(pp)
         result = self.db.get_temp_table('OUTPUT')
         self.assertEquals(result, expected)
@@ -309,7 +293,10 @@ class OptimizerTest(myrial_test.MyrialTestCase):
 
         self.db.evaluate(pp)
         result = self.db.get_temp_table('OUTPUT')
-        self.assertEquals(result, self.expected)
+        expected = collections.Counter(
+            [(a, b, c, d, e, f) for (a, b, c) in self.x_data
+             for (d, e, f) in self.y_data if a > b and e <= f and c == d])
+        self.assertEquals(result, expected)
 
     def test_multi_condition_join(self):
         s = expression.AND(expression.EQ(AttRef("c"), AttRef("d")),
@@ -328,7 +315,6 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         expected = collections.Counter(
             [(a, b, c, d, e, f) for (a, b, c) in self.x_data
              for (d, e, f) in self.y_data if a == f and c == d])
-
         self.db.evaluate(pp)
         result = self.db.get_temp_table('OUTPUT')
         self.assertEquals(result, expected)
@@ -356,7 +342,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
 
         self.db.evaluate(pp)
         result = self.db.get_table('OUTPUT')
-        self.assertEquals(result, self.expected2)
+        expected = collections.Counter(
+            [(s1, d3) for (s1, d1) in self.z_data.elements()
+             for (s2, d2) in self.z_data.elements()
+             for (s3, d3) in self.z_data.elements() if d1 == s2 and d2 == s3])
+        self.assertEquals(result, expected)
 
     def test_multiway_join_hyper_cube(self):
 
@@ -381,7 +371,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
 
         self.db.evaluate(pp)
         result = self.db.get_table('OUTPUT')
-        self.assertEquals(result, self.expected2)
+        expected = collections.Counter(
+            [(s1, d3) for (s1, d1) in self.z_data.elements()
+             for (s2, d2) in self.z_data.elements()
+             for (s3, d3) in self.z_data.elements() if d1 == s2 and d2 == s3])
+        self.assertEquals(result, expected)
 
     def test_hyper_cube_tie_breaking_heuristic(self):
         query = """
@@ -443,7 +437,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         self.db.evaluate(pp)
 
         result = self.db.get_temp_table('OUTPUT')
-        self.assertEquals(result, self.expected2)
+        expected = collections.Counter(
+            [(s1, d3) for (s1, d1) in self.z_data.elements()
+             for (s2, d2) in self.z_data.elements()
+             for (s3, d3) in self.z_data.elements() if d1 == s2 and d2 == s3])
+        self.assertEquals(result, expected)
 
     def test_explicit_shuffle(self):
         """Test of a user-directed partition operation."""
