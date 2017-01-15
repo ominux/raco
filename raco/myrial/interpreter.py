@@ -442,15 +442,15 @@ class StatementProcessor(object):
         op = expr[0].lower()
         args = expr[1:]
         if op in ["bagcomp"]:
-            for _id, expr in args[0]:
-                if expr:
-                    ret += self.get_idb_leaves(expr, idbs)
+            for _id, arg in args[0]:
+                if arg:
+                    ret += self.get_idb_leaves(arg, idbs)
                 elif _id in idbs:
                     ret += [_id]
         elif op in ["select"]:
-            for _id, expr in args[0].from_:
-                if expr:
-                    ret += self.get_idb_leaves(expr, idbs)
+            for _id, arg in args[0].from_:
+                if arg:
+                    ret += self.get_idb_leaves(arg, idbs)
                 elif _id in idbs:
                     ret += [_id]
         elif op in ["join", "union", "cross", "diff", "intersect"]:
@@ -485,9 +485,6 @@ class StatementProcessor(object):
         idbs = {}
         idx = 0
         for _type, _id, emits, expr in statement_list:
-            if _type != 'IDBASSIGN':
-                raise InvalidStatementException(
-                    '%s not allowed in do/until convergence' % _type.lower())
             if _id in self.symbols:
                 raise InvalidStatementException('IDB %s is already used' % _id)
 
@@ -518,25 +515,21 @@ class StatementProcessor(object):
             for _type, _id, emits, expr in statement_list:
                 if idbs[_id].children()[1] is not None:
                     continue
-                ready = True
                 leaves = self.get_idb_leaves(expr, idbs)
-                for leaf in leaves:
-                    if idbs[leaf].scheme() is None:
-                        ready = False
-                if ready:
+                if any(idbs[leaf].scheme() is None for leaf in leaves):
+                    done = False
+                else:
                     iterative_inputs = self.separate_inputs(expr, idbs, False)
                     if len(iterative_inputs) == 0:
-                        idbs[_id].children()[1] =\
-                            raco.algebra.EmptyRelation(raco.scheme.Scheme())
+                        idbs[_id].children()[1] = raco.algebra.EmptyRelation(
+                            raco.scheme.Scheme())
                     elif len(iterative_inputs) == 1:
-                        idbs[_id].children()[1] =\
-                            self.ep.evaluate(iterative_inputs[0])
+                        idbs[_id].children()[1] = self.ep.evaluate(
+                            iterative_inputs[0])
                     else:
                         idbs[_id].children()[1] = raco.algebra.UnionAll(
                             [self.ep.evaluate(expr)
                              for expr in iterative_inputs])
-                else:
-                    done = False
 
         op = raco.algebra.UntilConvergence(idbs.values())
         uses_set = self.ep.get_and_clear_uses_set()

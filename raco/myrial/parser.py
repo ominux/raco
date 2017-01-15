@@ -477,10 +477,10 @@ class Parser(object):
         p[0] = ('ASSIGN', p[1], p[3])
 
     @staticmethod
-    def p_statement_idbassign(p):
-        'statement : unreserved_id COLON EQUALS LBRACKET emit_arg_list \
+    def p_idbassign(p):
+        'idbassign : unreserved_id EQUALS LBRACKET emit_arg_list \
             RBRACKET LARROW rvalue SEMI'
-        p[0] = ('IDBASSIGN', p[1], p[5], p[8])
+        p[0] = ('IDBASSIGN', p[1], p[4], p[7])
 
     @staticmethod
     def p_statement_empty(p):
@@ -494,6 +494,15 @@ class Parser(object):
         """rvalue : expression
                   | select_from_where"""
         p[0] = p[1]
+
+    @staticmethod
+    def p_idbassign_list(p):
+        """idbassign_list : idbassign_list idbassign
+                          | idbassign"""
+        if len(p) == 3:
+            p[0] = p[1] + [p[2]]
+        else:
+            p[0] = [p[1]]
 
     @staticmethod
     def p_statement_list(p):
@@ -511,7 +520,7 @@ class Parser(object):
 
     @staticmethod
     def p_statement_dountilconvergence(p):
-        'statement : DO statement_list UNTIL CONVERGENCE recursion_mode SEMI'
+        'statement : DO idbassign_list UNTIL CONVERGENCE recursion_mode SEMI'
         p[0] = ('UNTILCONVERGENCE', p[2], p[5])
 
     @staticmethod

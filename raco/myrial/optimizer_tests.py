@@ -12,7 +12,7 @@ from raco.expression import aggregate
 from raco.backends.myria import (
     MyriaShuffleConsumer, MyriaShuffleProducer, MyriaHyperShuffleProducer,
     MyriaBroadcastConsumer, MyriaQueryScan, MyriaSplitConsumer, MyriaUnionAll,
-    MyriaDupElim, MyriaGroupBy, compile_to_json)
+    MyriaDupElim, MyriaGroupBy, MyriaIDBController, compile_to_json)
 from raco.backends.myria import (MyriaLeftDeepTreeAlgebra,
                                  MyriaHyperCubeAlgebra)
 from raco.compile import optimize
@@ -1202,13 +1202,18 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         E = scan(public:adhoc:Z);
         V = select distinct E.$0 from E;
         do
-            CC := [$0, MIN($1)] <- [from V emit V.$0 as x, V.$0 as y] +
+            CC = [$0, MIN($1)] <- [from V emit V.$0 as x, V.$0 as y] +
                     [from E, CC where E.$0 = CC.$0 emit E.$1, CC.$1];
         until convergence;
         store(CC, CC);
         """
         lp = self.get_logical_plan(query, async_ft='REJOIN')
         pp = self.logical_to_physical(lp, async_ft='REJOIN')
+        for op in pp.walk():
+            for child in op.children():
+                if isinstance(child, MyriaIDBController):
+                    # for checking rule RemoveSingleSplit
+                    assert isinstance(op, MyriaShuffleProducer)
         plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
 
         self.assertEquals(plan['ftMode'], 'REJOIN')
@@ -1217,12 +1222,9 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         self.assertEquals(idbs[0]['argState']['type'], 'KeepMinValue')
         self.assertEquals(idbs[0]['sync'], False)  # default value: async
         sps = self.list_ops_in_json(plan, 'ShuffleProducer')
-        found = False
-        for sp in sps:
-            if 'argBufferStateType' in sp and \
-                    sp['argBufferStateType']['type'] == 'KeepMinValue':
-                found = True
-        assert(found)
+        assert any(sp['argBufferStateType']['type'] == 'KeepMinValue'
+                   for sp in sps if 'argBufferStateType' in sp and
+                   sp['argBufferStateType'] is not None)
 
     def test_lca(self):
         """Test LCA"""
@@ -1230,11 +1232,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         Cite = scan(public:adhoc:X);
         Paper = scan(public:adhoc:Y);
         do
-        Ancestor := [$0,$1,MIN($2)] <- [from Cite emit $0, $1, 1] +
+        Ancestor = [$0,$1,MIN($2)] <- [from Cite emit $0, $1, 1] +
                 [from Ancestor, Cite
                  where Ancestor.$1 = Cite.$0
                  emit Ancestor.$0, Cite.$1, Ancestor.$2+1];
-        LCA := [$0,$1,MULTIMIN($2,$3,$4)] <-
+        LCA = [$0,$1,MULTIMIN($2,$3,$4)] <-
                 [from Ancestor as A1, Ancestor as A2, Paper
                  where A1.$1 = A2.$1 and A1.$1 = Paper.$0 and A1.$0 < A2.$0
                  emit A1.$0 as pid1, A2.$0 as pid2, greater(A1.$2, A2.$2),
@@ -1260,12 +1262,12 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         GoI = scan(public:adhoc:X);
         Particles = scan(public:adhoc:Y);
         do
-        Edges := [$0,$1,$2,COUNT(*)] <-
+        Edges = [$0,$1,$2,COUNT(*)] <-
                 [from Particles as P1, Particles as P2, Galaxies
                 where P1.$0 = P2.$0 and P1.$2+1 = P2.$2 and
                         P1.$2 = Galaxies.$0 and Galaxies.$1 = P1.$1
                 emit P1.$2 as time, P1.$1 as gid1, P2.$1 as gid2, P1.$0];
-        Galaxies := [$0, $1] <-
+        Galaxies = [$0, $1] <-
           [from GoI emit 1, GoI.$0] +
           [from Galaxies, Edges
            where Galaxies.$0 = Edges.$0 and
@@ -1275,6 +1277,10 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         store(Galaxies, Galaxies);
         """
         lp = self.get_logical_plan(query, async_ft='REJOIN')
+        for op in lp.walk():
+            if isinstance(op, Select):
+                # for checking rule RemoveEmptyFilter
+                assert(op.condition is not None)
         pp = self.logical_to_physical(lp, async_ft='REJOIN')
         plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
 

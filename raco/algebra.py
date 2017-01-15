@@ -206,7 +206,7 @@ class ZeroaryOperator(Operator):
         """Deep copy"""
         Operator.copy(self, other)
 
-    def compileme(self, resultsym):
+    def compileme(self):
         """Compile this operator, storing its result in resultsym"""
         raise NotImplementedError("{op}.compileme".format(op=type(self)))
 
@@ -406,8 +406,9 @@ class ScanIDB(ZeroaryOperator):
         return None
 
     def __repr__(self):
-        return "{op}({name!r},{sch!r})".format(
-            op=self.opname(), name=self.name, sch=self.scheme())
+        return "{op}({name!r},{sch!r},{idb!r})".format(
+            op=self.opname(), name=self.name, sch=self._scheme,
+            idb=self.idbcontroller)
 
 
 class IDBController(NaryOperator):
@@ -424,8 +425,8 @@ class IDBController(NaryOperator):
     def partitioning(self):
         return RepresentationProperties()
 
-    def get_agg_json(self):
-        (group_list, expr) = self.get_group_agg()
+    def get_agg(self):
+        group_list, expr = self.get_group_agg()
         if expr is None:
             return {"type": "DupElim"}
         if isinstance(expr,
@@ -475,11 +476,11 @@ class IDBController(NaryOperator):
         return DEFAULT_CARDINALITY
 
     def scheme(self):
-        if self.children()[0] is not None and not \
-                isinstance(self.children()[0], EmptyRelation):
+        if ((self.children()[0] is not None) and
+                (not isinstance(self.children()[0], EmptyRelation))):
             return self.children()[0].scheme()
-        if self.children()[1] is not None and not \
-                isinstance(self.children()[1], EmptyRelation):
+        if ((self.children()[1] is not None) and
+                (not isinstance(self.children()[1], EmptyRelation))):
             return self.children()[1].scheme()
         return None
 
@@ -518,7 +519,7 @@ class EOSController(UnaryOperator):
         return scheme.Scheme([])
 
     def shortStr(self):
-        return "%s" % (self.opname())
+        return self.opname()
 
 
 class IdenticalSchemeBinaryOperator(BinaryOperator):
@@ -1217,8 +1218,9 @@ class ProjectingJoin(Join):
     """Logical Projecting Join operator"""
 
     def __init__(self, condition=None, left=None, right=None,
-                 output_columns=None):
+                 output_columns=None, pull_order=None):
         self.output_columns = output_columns
+        self.pull_order = pull_order
         Join.__init__(self, condition, left, right)
 
     def __eq__(self, other):
@@ -1232,9 +1234,10 @@ class ProjectingJoin(Join):
                                real_str(self.output_columns, skip_out=True))
 
     def __repr__(self):
-        return "{op}({cond!r}, {l!r}, {r!r}, {oc!r})"\
+        return "{op}({cond!r}, {l!r}, {r!r}, {oc!r}, {pr!r})"\
             .format(op=self.opname(), cond=self.condition,
-                    l=self.left, r=self.right, oc=self.output_columns)
+                    l=self.left, r=self.right, oc=self.output_columns,
+                    pr=self.pull_order)
 
     def copy(self, other):
         """deep copy"""
