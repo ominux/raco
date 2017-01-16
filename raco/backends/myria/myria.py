@@ -813,7 +813,7 @@ class MyriaShuffleProducer(algebra.UnaryOperator, MyriaOperator):
             "argChild": inputid,
             "distributeFunction": df
         }
-        if self.buffer_type is not "None":
+        if self.buffer_type is not None:
             ret.update({"argBufferStateType": self.buffer_type})
 
         return ret
@@ -2106,10 +2106,10 @@ class DoUntilConvergence(rules.Rule):
         return ("DoUntilConvergence")
 
 
-def idb_until_convergence(**kwargs):
+def idb_until_convergence(async_ft):
     ret = [DoUntilConvergence(), RemoveEmptyFilter(), StoreFromIDB(),
            RemoveSingleSplit()]
-    if kwargs.get('async_ft', 'None') is not None:
+    if async_ft is not None:
         ret.append(PropagateAsyncFTBuffer())
     return ret
 
@@ -2151,7 +2151,7 @@ class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
             myriafy,
             [AddAppendTemp()],
             break_communication,
-            idb_until_convergence(),
+            idb_until_convergence(kwargs.get('async_ft', None)),
         ]
 
         if kwargs.get('add_splits', True):
@@ -2412,4 +2412,4 @@ def compile_to_json(raw_query, logical_plan, physical_plan,
 
     return {"rawQuery": raw_query, "logicalRa": str(logical_plan),
             "language": language, "plan": compile_plan(physical_plan),
-            "ftMode": kwargs.get('async_ft', None)}
+            "ftMode": kwargs.get('async_ft', "NONE")}
