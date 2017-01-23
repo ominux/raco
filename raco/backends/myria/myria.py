@@ -1972,7 +1972,7 @@ class StoreFromIDB(rules.Rule):
         return op
 
     def __str__(self):
-        return ("Store[relation](IDBScan(IDBController)) ->"
+        return ("Store[relation](IDBScan(IDBController)) -> "
                 "IDBController[relation]")
 
 
@@ -1986,6 +1986,8 @@ def replace_child_with(op, child, replacement):
             op.right = replacement
     elif isinstance(op, algebra.NaryOperator):
         op.args[op.args.index(child)] = replacement
+    else:  # should not happen
+        assert False
 
 
 class RemoveEmptyFilter(rules.Rule):
@@ -2071,7 +2073,7 @@ class DoUntilConvergence(rules.Rule):
     def fire(self, op):
         if not isinstance(op, algebra.UntilConvergence):
             return op
-        if any(isinstance(ch, MyriaEOSController) for ch in op.args):
+        if any(isinstance(ch, MyriaEOSController) for ch in op.children()):
             return op
 
         eos_controller = MyriaEOSController()
@@ -2151,7 +2153,7 @@ class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
             myriafy,
             [AddAppendTemp()],
             break_communication,
-            idb_until_convergence(kwargs.get('async_ft', None)),
+            idb_until_convergence(kwargs.get('async_ft')),
         ]
 
         if kwargs.get('add_splits', True):
@@ -2160,7 +2162,7 @@ class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
         # so we always need BreakSplit
         compile_grps_sequence.append([BreakSplit()])
 
-        if kwargs.get('join_pull_order', 'None') is not None:
+        if kwargs.get('join_pull_order') is not None:
             compile_grps_sequence.append(
                 [FillInJoinPullOrder(kwargs.get('join_pull_order'))])
 
