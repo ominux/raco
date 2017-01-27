@@ -431,12 +431,12 @@ class IDBController(NaryOperator):
         if expr is None:
             return {"type": "DupElim"}
         if isinstance(expr,
-                      (expression.aggregate.MIN,
-                       expression.aggregate.MULTIMIN)):
+                      (expression.aggregate.MIN, expression.aggregate.LEXMIN)):
             if isinstance(expr, expression.aggregate.MIN):
-                valueCols = [expr.input.position]
+                valueCols = [expr.input.get_position(self.scheme())]
             else:
-                valueCols = [operand.position for operand in expr.operands]
+                valueCols = [operand.get_position(self.scheme())
+                             for operand in expr.operands]
             return {
                 "type": "KeepMinValue",
                 "keyColIndices": group_list,
@@ -452,18 +452,18 @@ class IDBController(NaryOperator):
     def get_group_agg(self):
         agg_list = []
         group_list = []
-        for expr in self.emits:
+        for emit in self.emits:
+            expr = emit.sexprs[0]
             if isinstance(expr, expression.AggregateExpression):
                 if not isinstance(expr, (expression.aggregate.MIN,
-                                         expression.aggregate.MULTIMIN,
+                                         expression.aggregate.LEXMIN,
                                          expression.aggregate.COUNTALL)):
                     raise NotImplementedError(
                         "IDBController does not support agg type {}".format(
                             type(expr)))
                 agg_list.append(expr)
             else:
-                assert isinstance(expr, expression.UnnamedAttributeRef)
-                group_list.append(expr.position)
+                group_list.append(expr.get_position(self.scheme()))
         if len(agg_list) > 1:
             raise NotImplementedError("IDBController only can have one agg")
         if len(agg_list) == 0:
@@ -479,11 +479,27 @@ class IDBController(NaryOperator):
     def scheme(self):
         if ((self.children()[0] is not None) and
                 (not isinstance(self.children()[0], EmptyRelation))):
-            return self.children()[0].scheme()
-        if ((self.children()[1] is not None) and
+            in_scheme = self.children()[0].scheme()
+        elif ((self.children()[1] is not None) and
                 (not isinstance(self.children()[1], EmptyRelation))):
-            return self.children()[1].scheme()
-        return None
+            in_scheme = self.children()[1].scheme()
+        else:
+            return None
+
+        schema = scheme.Scheme()
+        for index, emit in enumerate(self.emits):
+            sexpr = emit.sexprs[0]
+            if isinstance(sexpr, expression.aggregate.LEXMIN):
+                for col in sexpr.operands:
+                    _name, _type = in_scheme.resolve(col)
+                    schema.addAttribute(_name, _type)
+            else:
+                name = (None if emit.column_names is None
+                        else emit.column_names[0])
+                _name = resolve_attribute_name(name, in_scheme, sexpr, index)
+                _type = sexpr.typeof(in_scheme, None);
+                schema.addAttribute(_name, _type)
+        return schema
 
     def shortStr(self):
         return "%s(%s)" % (self.opname(), real_str(self.name,

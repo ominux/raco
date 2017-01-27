@@ -1263,10 +1263,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         """Test Connected Components"""
         query = """
         E = scan(public:adhoc:Z);
-        V = select distinct E.$0 from E;
+        V = select distinct E.src as x from E;
         do
-            CC = [$0, MIN($1)] <- [from V emit V.$0 as x, V.$0 as y] +
-                    [from E, CC where E.$0 = CC.$0 emit E.$1, CC.$1];
+            CC = [nid, MIN(cid) as cid] <-
+                 [from V emit V.x as nid, V.x as cid] +
+                 [from E, CC where E.src = CC.nid emit E.dst as nid, CC.cid];
         until convergence;
         store(CC, CC);
         """
@@ -1295,15 +1296,16 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         Cite = scan(public:adhoc:X);
         Paper = scan(public:adhoc:Y);
         do
-        Ancestor = [$0,$1,MIN($2)] <- [from Cite emit $0, $1, 1] +
+        Ancestor = [a,b,MIN(dis) as dis] <- [from Cite emit a, b, 1 as dis] +
                 [from Ancestor, Cite
-                 where Ancestor.$1 = Cite.$0
-                 emit Ancestor.$0, Cite.$1, Ancestor.$2+1];
-        LCA = [$0,$1,MULTIMIN($2,$3,$4)] <-
+                 where Ancestor.b = Cite.a
+                 emit Ancestor.a, Cite.b, Ancestor.dis+1];
+        LCA = [pid1,pid2,LEXMIN(dis,yr,anc)] <-
                 [from Ancestor as A1, Ancestor as A2, Paper
-                 where A1.$1 = A2.$1 and A1.$1 = Paper.$0 and A1.$0 < A2.$0
-                 emit A1.$0 as pid1, A2.$0 as pid2, greater(A1.$2, A2.$2),
-                 Paper.$1, A1.$1 as aid];
+                 where A1.b = A2.b and A1.b = Paper.d and A1.a < A2.a
+                 emit A1.a as pid1, A2.a as pid2,
+                 greater(A1.dis, A2.dis) as dis,
+                 Paper.e as yr, A1.b as anc];
         until convergence sync;
         store(LCA, LCA);
         """
@@ -1325,17 +1327,17 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         GoI = scan(public:adhoc:X);
         Particles = scan(public:adhoc:Y);
         do
-        Edges = [$0,$1,$2,COUNT(*)] <-
+        Edges = [time,gid1,gid2,COUNT(*) as num] <-
                 [from Particles as P1, Particles as P2, Galaxies
-                where P1.$0 = P2.$0 and P1.$2+1 = P2.$2 and
-                        P1.$2 = Galaxies.$0 and Galaxies.$1 = P1.$1
-                emit P1.$2 as time, P1.$1 as gid1, P2.$1 as gid2, P1.$0];
-        Galaxies = [$0, $1] <-
-          [from GoI emit 1, GoI.$0] +
+                where P1.d = P2.d and P1.f+1 = P2.f and
+                      P1.f = Galaxies.time and Galaxies.gid = P1.e
+                emit P1.f as time, P1.e as gid1, P2.e as gid2];
+        Galaxies = [time, gid] <-
+          [from GoI emit 1 as time, GoI.a as gid] +
           [from Galaxies, Edges
-           where Galaxies.$0 = Edges.$0 and
-           Galaxies.$1 = Edges.$1 and Edges.$3 >= 4
-           emit Galaxies.$0+1, Edges.$2];
+           where Galaxies.time = Edges.time and
+           Galaxies.gid = Edges.gid1 and Edges.num >= 4
+           emit Galaxies.time+1, Edges.gid2 as gid];
         until convergence async;
         store(Galaxies, Galaxies);
         """

@@ -494,12 +494,10 @@ class StatementProcessor(object):
         for _type, _id, emits, expr in statement_list:
             if _id in self.symbols:
                 raise InvalidStatementException('IDB %s is already used' % _id)
-
-            emit_args = [emit.sexprs[0] for emit in emits]
             idbcontroller = raco.algebra.IDBController(
                 _id, idx,
                 [None, None, raco.algebra.EmptyRelation(raco.scheme.Scheme())],
-                emit_args, None, recursion_mode)
+                emits, None, recursion_mode)
             idbs[_id] = idbcontroller
             self.symbols[_id] = raco.algebra.ScanIDB(_id, None, idbcontroller)
             idx = idx + 1

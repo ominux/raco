@@ -53,8 +53,8 @@ EXPRESSIONS_CASE = {
     'greatest': lambda num_args: create_nested_binary(num_args, GREATER),
     'least': lambda num_args: create_nested_binary(num_args, LESSER),
     'greater': create_nested_binary(2, GREATER),
-    'MultiMin': lambda num_args:
-        create_variable_length_function(num_args, MULTIMIN),
+    'lexmin': lambda num_args:
+        create_variable_length_function(num_args, LEXMIN),
     'lesser': create_nested_binary(2, LESSER),
     'substr': Function(['str', 'begin', 'end'],
                        SUBSTR([NamedAttributeRef('str'),

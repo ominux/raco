@@ -203,7 +203,7 @@ class MIN(UnaryFunction, TrivialAggregateExpression):
         return self.input.typeof(scheme, state_scheme)
 
 
-class MULTIMIN(NaryFunction, TrivialAggregateExpression):
+class LEXMIN(NaryFunction, TrivialAggregateExpression):
     # TODO: support for fakedb
     def evaluate_aggregate(self, tuple_iterator, scheme):
         raise NotImplementedError()
