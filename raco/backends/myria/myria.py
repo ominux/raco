@@ -842,48 +842,35 @@ class MyriaShuffleConsumer(algebra.UnaryOperator, MyriaOperator):
         }
 
 
-class MyriaConsumer(algebra.ZeroaryOperator, MyriaOperator):
+class MyriaConsumer(algebra.UnaryOperator, MyriaOperator):
 
-    """A Myria Consumer"""
+    """A Myria Consumer. Used as child for IDBController and EOSController"""
 
-    def __init__(self, _scheme=None, producer=None):
-        self._scheme = _scheme
-        self.producer = producer
-        if producer is not None and isinstance(producer, MyriaSplitProducer):
-            producer.append_consumer(self)
-        algebra.ZeroaryOperator.__init__(self)
+    def __init__(self, input):
+        algebra.UnaryOperator.__init__(self, input)
+        self.set_stop_recursion()
 
     def __repr__(self):
-        return "{op}({sch!r})".format(
-            op=self.opname(), sch=self.scheme())
+        return "{op}({inp!r})".format(inp=self.input, op=self.opname())
 
     def partitioning(self):
-        return self.producer.partitioning()
+        return self.input.partitioning()
 
     def num_tuples(self):
-        return self.producer.num_tuples()
+        return self.input.num_tuples()
 
     def shortStr(self):
         return "%s(%s)" % (self.opname(), self.scheme())
 
     def scheme(self):
-        if self._scheme is not None:
-            return self._scheme
-        if self.producer is not None and isinstance(
-                self.producer, (MyriaSplitProducer, MyriaShuffleProducer)):
-            return self.producer.scheme()
-        return None
+        if isinstance(self.input, MyriaIDBController):
+            return scheme.Scheme([("idbID", types.INT_TYPE),
+                                  ("isDeltaEmpty", types.BOOLEAN_TYPE)])
+        return scheme.Scheme()
 
     def compileme(self, inputid):
-        if isinstance(self.producer, MyriaSplitProducer):
-            consumer = 'LocalMultiwayConsumer'
-        elif isinstance(self.producer, MyriaShuffleProducer):
-            consumer = 'ShuffleConsumer'
-        else:
-            # MyriaEOSController and MyriaIDBController
-            consumer = 'Consumer'
         return {
-            'opType': consumer,
+            'opType': 'Consumer',
             'argOperatorId': inputid
         }
 
@@ -1024,6 +1011,7 @@ class MyriaQueryScan(algebra.ZeroaryOperator, MyriaOperator):
                  num_tuples=algebra.DEFAULT_CARDINALITY,
                  partitioning=RepresentationProperties(),
                  debroadcast=False):
+        algebra.ZeroaryOperator.__init__(self)
         self.sql = str(sql)
         self._scheme = scheme
         self.source_relation_keys = source_relation_keys
@@ -2018,22 +2006,10 @@ class RemoveSingleSplit(rules.Rule):
             producer = parent_map[id(child.consumers[0])][0]
             if not isinstance(producer, MyriaShuffleProducer):
                 continue
-            producer.input = child.input
-            consumer = parent_map[id(producer)][0]
-            upper_op = parent_map[id(consumer)][0]
-            new_consumer = MyriaConsumer(None, producer)
-            if isinstance(upper_op, algebra.UnaryOperator):
-                upper_op.input = new_consumer
-            elif isinstance(upper_op, algebra.BinaryOperator):
-                if upper_op.left == parent_map[id(producer)][0]:
-                    upper_op.left = new_consumer
-                else:
-                    upper_op.right = new_consumer
-            else:
-                for idx, t in enumerate(upper_op.args):
-                    if upper_op.args[idx] == parent_map[id(producer)][0]:
-                        upper_op.args[idx] = new_consumer
-                        break
+            idb = child.children()[0]
+            replace_child_with(producer, child.consumers[0], idb)
+            if child.consumers[0].stop_recursion:
+                parent_map[id(producer)][0].set_stop_recursion()
             op.args[idx] = producer
         return op
 
@@ -2046,14 +2022,13 @@ class DoUntilConvergence(rules.Rule):
 
     @staticmethod
     def replace_scan_with_idb_consumer(op, idb_controllers, idb_producers):
-        if isinstance(op, algebra.ZeroaryOperator):
-            return
         for ch in op.children():
             if isinstance(ch, algebra.ScanIDB):
                 if ch.name not in idb_producers:
                     idb_producers[ch.name] = MyriaSplitProducer(
                         idb_controllers[ch.name])
-                consumer = MyriaConsumer(None, idb_producers[ch.name])
+                consumer = MyriaSplitConsumer(idb_producers[ch.name])
+                consumer.set_stop_recursion()
                 replace_child_with(op, ch, consumer)
                 if (isinstance(op, algebra.Select) and
                         (isinstance(op.condition, expression.boolean.GTEQ) or
@@ -2066,6 +2041,8 @@ class DoUntilConvergence(rules.Rule):
                             # count generates integers, translate it to GTEQ
                             agg.threshold = op.condition.right.value + 1
                         op.condition = None
+            elif ch.stop_recursion:
+                pass
             else:
                 DoUntilConvergence.replace_scan_with_idb_consumer(
                     ch, idb_controllers, idb_producers)
@@ -2080,8 +2057,8 @@ class DoUntilConvergence(rules.Rule):
         eos_consumers = []
         idb_controllers = {}
         for idb_controller in op.children():
-            idb_controller.args[2] = MyriaConsumer(None, eos_controller)
-            eos_consumers.append(MyriaConsumer(None, idb_controller))
+            idb_controller.args[2] = MyriaConsumer(eos_controller)
+            eos_consumers.append(MyriaConsumer(idb_controller))
             idb_controllers[idb_controller.name] = idb_controller
         if len(eos_consumers) == 1:
             eos_controller.input = eos_consumers[0]
@@ -2292,7 +2269,9 @@ def compile_fragment(frag_root):
         # Initially, there are no new roots discovered below leaves of this
         # fragment.
         queue = []
-        if isinstance(rootOp, MyriaAlgebra.fragment_leaves):
+        if rootOp.stop_recursion:
+            pass
+        elif isinstance(rootOp, MyriaAlgebra.fragment_leaves):
             # The current root operator is a fragment leaf, such as a
             # ShuffleProducer. Append its children to the queue of new roots.
             for child in rootOp.children():
@@ -2331,10 +2310,7 @@ def compile_fragment(frag_root):
     def call_compile_me(op):
         "A shortcut to call the operator's compile_me function."
         op_id = op_ids[id(op)]
-        if isinstance(op, MyriaConsumer):
-            child_op_ids = [op_ids[id(op.producer)]]
-        else:
-            child_op_ids = [op_ids[id(child)] for child in op.children()]
+        child_op_ids = [op_ids[id(child)] for child in op.children()]
         op_dict = op.compileme(*child_op_ids)
         op_dict['opName'] = op.shortStr()
         assert isinstance(op_id, int), (type(op_id), op_id)

@@ -12,7 +12,7 @@ from raco.expression import aggregate
 from raco.backends.myria import (
     MyriaShuffleConsumer, MyriaShuffleProducer, MyriaHyperCubeShuffleProducer,
     MyriaBroadcastConsumer, MyriaQueryScan, MyriaSplitConsumer, MyriaUnionAll,
-    MyriaBroadcastProducer, MyriaScan, MyriaSelect,
+    MyriaBroadcastProducer, MyriaScan, MyriaSelect, MyriaSplitProducer,
     MyriaDupElim, MyriaGroupBy, MyriaIDBController, compile_to_json)
 from raco.backends.myria import (MyriaLeftDeepTreeAlgebra,
                                  MyriaHyperCubeAlgebra)
@@ -1273,11 +1273,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         """
         lp = self.get_logical_plan(query, async_ft='REJOIN')
         pp = self.logical_to_physical(lp, async_ft='REJOIN')
-        for op in pp.walk():
+        for op in pp.children():
             for child in op.children():
                 if isinstance(child, MyriaIDBController):
                     # for checking rule RemoveSingleSplit
-                    assert isinstance(op, MyriaShuffleProducer)
+                    assert not isinstance(op, MyriaSplitProducer)
         plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
 
         self.assertEquals(plan['ftMode'], 'REJOIN')

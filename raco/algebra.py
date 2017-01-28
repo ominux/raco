@@ -50,6 +50,10 @@ class Operator(Printable):
         self.cleanup = ""
         self.alias = self
         self._trace = []
+        self.stop_recursion = False
+
+    def set_stop_recursion(self):
+        self.stop_recursion = True
 
     @abstractmethod
     def apply(self, f):
@@ -98,11 +102,11 @@ class Operator(Printable):
             for x in c.preorder(f):
                 yield x
 
-    def collectParents(self, parent_map=None):
+    def collectParents(self, parent_map={}):
         """Construct a dict mapping children to parents. Used in
         optimization"""
-        if parent_map is None:
-            parent_map = {}
+        if self.stop_recursion:
+            return
         for c in self.children():
             parent_map.setdefault(id(c), []).append(self)
             c.collectParents(parent_map)
@@ -114,6 +118,8 @@ class Operator(Printable):
         return self.__class__ == other.__class__
 
     def __str__(self):
+        if self.stop_recursion:
+            return self.shortStr()
         if len(self.children()) > 0:
             return "%s%s" % (self.shortStr(), real_str(self.children()))
         return self.shortStr()
@@ -497,7 +503,7 @@ class IDBController(NaryOperator):
                 name = (None if emit.column_names is None
                         else emit.column_names[0])
                 _name = resolve_attribute_name(name, in_scheme, sexpr, index)
-                _type = sexpr.typeof(in_scheme, None);
+                _type = sexpr.typeof(in_scheme, None)
                 schema.addAttribute(_name, _type)
         return schema
 
@@ -1570,6 +1576,7 @@ class EmptyRelation(ZeroaryOperator):
     """Relation with no tuples."""
 
     def __init__(self, _scheme=None):
+        ZeroaryOperator.__init__(self)
         self._scheme = _scheme
 
     def num_tuples(self):
