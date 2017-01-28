@@ -13,7 +13,8 @@ from raco.backends.myria import (
     MyriaShuffleConsumer, MyriaShuffleProducer, MyriaHyperCubeShuffleProducer,
     MyriaBroadcastConsumer, MyriaQueryScan, MyriaSplitConsumer, MyriaUnionAll,
     MyriaBroadcastProducer, MyriaScan, MyriaSelect, MyriaSplitProducer,
-    MyriaDupElim, MyriaGroupBy, MyriaIDBController, compile_to_json)
+    MyriaDupElim, MyriaGroupBy, MyriaIDBController, MyriaSymmetricHashJoin,
+    compile_to_json)
 from raco.backends.myria import (MyriaLeftDeepTreeAlgebra,
                                  MyriaHyperCubeAlgebra)
 from raco.compile import optimize
@@ -1268,7 +1269,7 @@ class OptimizerTest(myrial_test.MyrialTestCase):
             CC = [nid, MIN(cid) as cid] <-
                  [from V emit V.x as nid, V.x as cid] +
                  [from E, CC where E.src = CC.nid emit E.dst as nid, CC.cid];
-        until convergence;
+        until convergence pull_idb;
         store(CC, CC);
         """
         lp = self.get_logical_plan(query, async_ft='REJOIN')
@@ -1280,6 +1281,10 @@ class OptimizerTest(myrial_test.MyrialTestCase):
                     assert not isinstance(op, MyriaSplitProducer)
         plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
 
+        joins = [op for op in pp.walk()
+                 if isinstance(op, MyriaSymmetricHashJoin)]
+        assert len(joins) == 1
+        assert joins[0].pull_order == 'RIGHT'
         self.assertEquals(plan['ftMode'], 'REJOIN')
         idbs = self.list_ops_in_json(plan, 'IDBController')
         self.assertEquals(len(idbs), 1)
@@ -1312,7 +1317,6 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         lp = self.get_logical_plan(query, async_ft='REJOIN')
         pp = self.logical_to_physical(lp, async_ft='REJOIN')
         plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
-
         idbs = self.list_ops_in_json(plan, 'IDBController')
         self.assertEquals(len(idbs), 2)
         self.assertEquals(idbs[0]['argState']['type'], 'KeepMinValue')
@@ -1338,7 +1342,7 @@ class OptimizerTest(myrial_test.MyrialTestCase):
            where Galaxies.time = Edges.time and
            Galaxies.gid = Edges.gid1 and Edges.num >= 4
            emit Galaxies.time+1, Edges.gid2 as gid];
-        until convergence async;
+        until convergence async build_EDB;
         store(Galaxies, Galaxies);
         """
         lp = self.get_logical_plan(query, async_ft='REJOIN')
@@ -1348,6 +1352,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
                 assert(op.condition is not None)
         pp = self.logical_to_physical(lp, async_ft='REJOIN')
         plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
+
+        joins = [op for op in pp.walk()
+                 if isinstance(op, MyriaSymmetricHashJoin)]
+        # The two joins for Edges
+        assert len([j for j in joins if j.pull_order == 'LEFT_EOS']) == 2
 
         idbs = self.list_ops_in_json(plan, 'IDBController')
         self.assertEquals(len(idbs), 2)

@@ -1902,14 +1902,44 @@ class FlattenUnionAll(rules.Rule):
 
 class FillInJoinPullOrder(rules.Rule):
 
-    def __init__(self, pull_order):
+    def __init__(self):
         self._disabled = False
-        self.pull_order = pull_order
+
+    def get_idb_side(self, op):
+        for child in op.children():
+            if isinstance(child, MyriaIDBController):
+                return True
+            if self.get_idb_side(child):
+                return True
+        return False
 
     def fire(self, op):
-        if not isinstance(op, MyriaSymmetricHashJoin):
+        if not isinstance(op, algebra.UntilConvergence):
             return op
-        op.pull_order = self.pull_order
+        if op.pull_order is None or op.pull_order == 'ALTER':
+            return op
+        for ch in op.walk():
+            if isinstance(ch, MyriaSymmetricHashJoin):
+                left_idb = self.get_idb_side(ch.left)
+                right_idb = self.get_idb_side(ch.right)
+                if op.pull_order == 'PULL_IDB':
+                    # ALTER when both are IDBs
+                    if left_idb and not right_idb:
+                        ch.pull_order = 'LEFT'
+                    elif right_idb and not left_idb:
+                        ch.pull_order = 'RIGHT'
+                elif op.pull_order == 'PULL_EDB':
+                    # ALTER when both are EDBs
+                    if left_idb and not right_idb:
+                        ch.pull_order = 'RIGHT'
+                    elif right_idb and not left_idb:
+                        ch.pull_order = 'LEFT'
+                elif op.pull_order == 'BUILD_EDB':
+                    # pick any EDB to save one hash table
+                    if not left_idb:
+                        ch.pull_order = 'LEFT_EOS'
+                    elif not right_idb:
+                        ch.pull_order = 'RIGHT_EOS'
         return op
 
 
@@ -2087,7 +2117,7 @@ class DoUntilConvergence(rules.Rule):
 
 def idb_until_convergence(async_ft):
     ret = [DoUntilConvergence(), RemoveEmptyFilter(), StoreFromIDB(),
-           RemoveSingleSplit()]
+           RemoveSingleSplit(), FillInJoinPullOrder()]
     if async_ft is not None:
         ret.append(PropagateAsyncFTBuffer())
     return ret
@@ -2138,10 +2168,6 @@ class MyriaLeftDeepTreeAlgebra(MyriaAlgebra):
         # Even when false, plans may already include (manually added) Splits,
         # so we always need BreakSplit
         compile_grps_sequence.append([BreakSplit()])
-
-        if kwargs.get('join_pull_order') is not None:
-            compile_grps_sequence.append(
-                [FillInJoinPullOrder(kwargs.get('join_pull_order'))])
 
         rule_grps_sequence = opt_grps_sequence + compile_grps_sequence
 

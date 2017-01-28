@@ -416,6 +416,15 @@ class Parser(object):
         p[0] = p[1] or []
 
     @staticmethod
+    def p_pull_order(p):
+        """pull_order : ALTER
+                      | PULL_IDB
+                      | PULL_EDB
+                      | BUILD_EDB
+                      | empty"""
+        p[0] = p[1] or []
+
+    @staticmethod
     def p_function_arg_list(p):
         """function_arg_list : function_arg_list COMMA unreserved_id
                              | unreserved_id"""
@@ -520,8 +529,9 @@ class Parser(object):
 
     @staticmethod
     def p_statement_dountilconvergence(p):
-        'statement : DO idbassign_list UNTIL CONVERGENCE recursion_mode SEMI'
-        p[0] = ('UNTILCONVERGENCE', p[2], p[5])
+        ('statement : DO idbassign_list UNTIL CONVERGENCE '
+         'recursion_mode pull_order SEMI')
+        p[0] = ('UNTILCONVERGENCE', p[2], p[5], p[6])
 
     @staticmethod
     def p_statement_store(p):

@@ -70,6 +70,8 @@ class Operator(Printable):
     def walk(self):
         """Return an iterator over the tree of operators."""
         yield self
+        if self.stop_recursion:
+            return
         for c in self.children():
             for x in c.walk():
                 yield x
@@ -1998,11 +2000,12 @@ class DoWhile(NaryOperator):
 
 class UntilConvergence(NaryOperator):
 
-    def __init__(self, ops=None):
+    def __init__(self, ops=None, pull_order=None):
         """Repeatedly execute a sequence of plans until convergence.
         :params ops: A list of operations to execute in parallel.
         """
         NaryOperator.__init__(self, ops)
+        self.pull_order = pull_order
 
     def partitioning(self):
         return RepresentationProperties()

@@ -488,7 +488,7 @@ class StatementProcessor(object):
                 return [expr]
         return []
 
-    def untilconvergence(self, statement_list, recursion_mode):
+    def untilconvergence(self, statement_list, recursion_mode, pull_order):
         idbs = {}
         idx = 0
         for _type, _id, emits, expr in statement_list:
@@ -536,7 +536,7 @@ class StatementProcessor(object):
                             [self.ep.evaluate(expr)
                              for expr in iterative_inputs])
 
-        op = raco.algebra.UntilConvergence(idbs.values())
+        op = raco.algebra.UntilConvergence(idbs.values(), pull_order)
         uses_set = self.ep.get_and_clear_uses_set()
         self.cfg.add_op(op, None, uses_set)
 
