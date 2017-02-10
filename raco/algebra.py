@@ -122,8 +122,8 @@ class Operator(Printable):
 
     def __str__(self):
         if not self.stop_recursion:
-          if len(self.children()) > 0:
-              return "%s%s" % (self.shortStr(), real_str(self.children()))
+            if len(self.children()) > 0:
+                return "%s%s" % (self.shortStr(), real_str(self.children()))
         return self.shortStr()
 
     def __hash__(self):
