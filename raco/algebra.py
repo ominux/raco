@@ -70,11 +70,10 @@ class Operator(Printable):
     def walk(self):
         """Return an iterator over the tree of operators."""
         yield self
-        if self.stop_recursion:
-            return
-        for c in self.children():
-            for x in c.walk():
-                yield x
+        if not self.stop_recursion:
+            for c in self.children():
+                for x in c.walk():
+                    yield x
 
     @abstractmethod
     def num_tuples(self):
@@ -89,9 +88,10 @@ class Operator(Printable):
     def postorder(self, f):
         """Postorder traversal, applying a function to each operator.  The
         function returns an iterator"""
-        for c in self.children():
-            for x in c.postorder(f):
-                yield x
+        if not self.stop_recursion:
+            for c in self.children():
+                for x in c.postorder(f):
+                    yield x
         for x in f(self):
             yield x
 
@@ -100,9 +100,10 @@ class Operator(Printable):
         function returns an iterator"""
         for x in f(self):
             yield x
-        for c in self.children():
-            for x in c.preorder(f):
-                yield x
+        if not self.stop_recursion:
+            for c in self.children():
+                for x in c.preorder(f):
+                    yield x
 
     def collectParents(self, parent_map={}):
         """Construct a dict mapping children to parents. Used in
@@ -120,10 +121,9 @@ class Operator(Printable):
         return self.__class__ == other.__class__
 
     def __str__(self):
-        if self.stop_recursion:
-            return self.shortStr()
-        if len(self.children()) > 0:
-            return "%s%s" % (self.shortStr(), real_str(self.children()))
+        if not self.stop_recursion:
+          if len(self.children()) > 0:
+              return "%s%s" % (self.shortStr(), real_str(self.children()))
         return self.shortStr()
 
     def __hash__(self):
@@ -485,12 +485,11 @@ class IDBController(NaryOperator):
         return DEFAULT_CARDINALITY
 
     def scheme(self):
-        if ((self.children()[0] is not None) and
-                (not isinstance(self.children()[0], EmptyRelation))):
-            in_scheme = self.children()[0].scheme()
-        elif ((self.children()[1] is not None) and
-                (not isinstance(self.children()[1], EmptyRelation))):
-            in_scheme = self.children()[1].scheme()
+        child1, child2 = self.children()[:2]
+        if child1 is not None and not isinstance(child1, EmptyRelation):
+            input_scheme = child1.scheme()
+        elif child2 is not None and not isinstance(child2, EmptyRelation):
+            input_scheme = child2.scheme()
         else:
             return None
 
@@ -499,13 +498,14 @@ class IDBController(NaryOperator):
             sexpr = emit.sexprs[0]
             if isinstance(sexpr, expression.aggregate.LEXMIN):
                 for col in sexpr.operands:
-                    _name, _type = in_scheme.resolve(col)
+                    _name, _type = input_scheme.resolve(col)
                     schema.addAttribute(_name, _type)
             else:
                 name = (None if emit.column_names is None
                         else emit.column_names[0])
-                _name = resolve_attribute_name(name, in_scheme, sexpr, index)
-                _type = sexpr.typeof(in_scheme, None)
+                _name = resolve_attribute_name(
+                    name, input_scheme, sexpr, index)
+                _type = sexpr.typeof(input_scheme, None)
                 schema.addAttribute(_name, _type)
         return schema
 
@@ -1252,9 +1252,9 @@ class ProjectingJoin(Join):
     """Logical Projecting Join operator"""
 
     def __init__(self, condition=None, left=None, right=None,
-                 output_columns=None, pull_order=None):
+                 output_columns=None, pull_order_policy='ALTERNATE'):
         self.output_columns = output_columns
-        self.pull_order = pull_order
+        self.pull_order_policy = pull_order_policy
         Join.__init__(self, condition, left, right)
 
     def __eq__(self, other):
@@ -1271,7 +1271,7 @@ class ProjectingJoin(Join):
         return "{op}({cond!r}, {l!r}, {r!r}, {oc!r}, {pr!r})"\
             .format(op=self.opname(), cond=self.condition,
                     l=self.left, r=self.right, oc=self.output_columns,
-                    pr=self.pull_order)
+                    pr=self.pull_order_policy)
 
     def copy(self, other):
         """deep copy"""
@@ -2000,12 +2000,12 @@ class DoWhile(NaryOperator):
 
 class UntilConvergence(NaryOperator):
 
-    def __init__(self, ops=None, pull_order=None):
+    def __init__(self, ops=None, pull_order_policy='ALTERNATE'):
         """Repeatedly execute a sequence of plans until convergence.
         :params ops: A list of operations to execute in parallel.
         """
         NaryOperator.__init__(self, ops)
-        self.pull_order = pull_order
+        self.pull_order_policy = pull_order_policy
 
     def partitioning(self):
         return RepresentationProperties()

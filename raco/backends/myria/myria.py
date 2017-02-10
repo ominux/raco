@@ -415,10 +415,9 @@ class MyriaSymmetricHashJoin(algebra.ProjectingJoin, MyriaOperator):
             "argChild2": "%s" % rightid,
             "argColumns2": rightcols,
             "argSelect1": allleft,
-            "argSelect2": allright
+            "argSelect2": allright,
+            "argOrder": self.pull_order_policy
         }
-        if self.pull_order is not None:
-            join.update({"argOrder": self.pull_order})
 
         return join
 
@@ -1905,41 +1904,41 @@ class FillInJoinPullOrder(rules.Rule):
     def __init__(self):
         self._disabled = False
 
-    def get_idb_side(self, op):
+    def find_idb(self, op):
         for child in op.children():
             if isinstance(child, MyriaIDBController):
                 return True
-            if self.get_idb_side(child):
+            if self.find_idb(child):
                 return True
         return False
 
     def fire(self, op):
         if not isinstance(op, algebra.UntilConvergence):
             return op
-        if op.pull_order is None or op.pull_order == 'ALTER':
+        if op.pull_order_policy == 'ALTERNATE':
             return op
         for ch in op.walk():
             if isinstance(ch, MyriaSymmetricHashJoin):
-                left_idb = self.get_idb_side(ch.left)
-                right_idb = self.get_idb_side(ch.right)
-                if op.pull_order == 'PULL_IDB':
-                    # ALTER when both are IDBs
+                left_idb = self.find_idb(ch.left)
+                right_idb = self.find_idb(ch.right)
+                if op.pull_order_policy == 'PULL_IDB':
+                    # ALTERNATE when both are IDBs
                     if left_idb and not right_idb:
-                        ch.pull_order = 'LEFT'
+                        ch.pull_order_policy = 'LEFT'
                     elif right_idb and not left_idb:
-                        ch.pull_order = 'RIGHT'
-                elif op.pull_order == 'PULL_EDB':
-                    # ALTER when both are EDBs
+                        ch.pull_order_policy = 'RIGHT'
+                elif op.pull_order_policy == 'PULL_EDB':
+                    # ALTERNATE when both are EDBs
                     if left_idb and not right_idb:
-                        ch.pull_order = 'RIGHT'
+                        ch.pull_order_policy = 'RIGHT'
                     elif right_idb and not left_idb:
-                        ch.pull_order = 'LEFT'
-                elif op.pull_order == 'BUILD_EDB':
+                        ch.pull_order_policy = 'LEFT'
+                elif op.pull_order_policy == 'BUILD_EDB':
                     # pick any EDB to save one hash table
                     if not left_idb:
-                        ch.pull_order = 'LEFT_EOS'
+                        ch.pull_order_policy = 'LEFT_EOS'
                     elif not right_idb:
-                        ch.pull_order = 'RIGHT_EOS'
+                        ch.pull_order_policy = 'RIGHT_EOS'
         return op
 
 

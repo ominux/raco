@@ -416,12 +416,12 @@ class Parser(object):
         p[0] = p[1] or []
 
     @staticmethod
-    def p_pull_order(p):
-        """pull_order : ALTER
-                      | PULL_IDB
-                      | PULL_EDB
-                      | BUILD_EDB
-                      | empty"""
+    def p_pull_order_policy(p):
+        """pull_order_policy : ALTERNATE
+                             | PULL_IDB
+                             | PULL_EDB
+                             | BUILD_EDB
+                             | empty"""
         p[0] = p[1] or []
 
     @staticmethod
@@ -530,7 +530,7 @@ class Parser(object):
     @staticmethod
     def p_statement_dountilconvergence(p):
         ('statement : DO idbassign_list UNTIL CONVERGENCE '
-         'recursion_mode pull_order SEMI')
+         'recursion_mode pull_order_policy SEMI')
         p[0] = ('UNTILCONVERGENCE', p[2], p[5], p[6])
 
     @staticmethod

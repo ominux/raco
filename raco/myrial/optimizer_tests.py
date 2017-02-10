@@ -1284,7 +1284,7 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         joins = [op for op in pp.walk()
                  if isinstance(op, MyriaSymmetricHashJoin)]
         assert len(joins) == 1
-        assert joins[0].pull_order == 'RIGHT'
+        assert joins[0].pull_order_policy == 'RIGHT'
         self.assertEquals(plan['ftMode'], 'REJOIN')
         idbs = self.list_ops_in_json(plan, 'IDBController')
         self.assertEquals(len(idbs), 1)
@@ -1352,11 +1352,11 @@ class OptimizerTest(myrial_test.MyrialTestCase):
                 assert(op.condition is not None)
         pp = self.logical_to_physical(lp, async_ft='REJOIN')
         plan = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
-
         joins = [op for op in pp.walk()
                  if isinstance(op, MyriaSymmetricHashJoin)]
         # The two joins for Edges
-        assert len([j for j in joins if j.pull_order == 'LEFT_EOS']) == 2
+        assert len(
+            [j for j in joins if j.pull_order_policy == 'LEFT_EOS']) == 2
 
         idbs = self.list_ops_in_json(plan, 'IDBController')
         self.assertEquals(len(idbs), 2)
@@ -1364,6 +1364,31 @@ class OptimizerTest(myrial_test.MyrialTestCase):
         self.assertEquals(idbs[1]['argState']['type'], 'DupElim')
         self.assertEquals(idbs[0]['sync'], False)
         self.assertEquals(idbs[1]['sync'], False)
+
+        super(OptimizerTest, self).new_processor()
+        query = """
+        GoI = scan(public:adhoc:X);
+        Particles = scan(public:adhoc:Y);
+        do
+        Edges = [time,gid1,gid2,COUNT(*) as num] <-
+                [from Particles as P1, Particles as P2, Galaxies
+                where P1.d = P2.d and P1.f+1 = P2.f and
+                      P1.f = Galaxies.time and Galaxies.gid = P1.e
+                emit P1.f as time, P1.e as gid1, P2.e as gid2];
+        Galaxies = [time, gid] <-
+          [from GoI emit 1 as time, GoI.a as gid] +
+          [from Galaxies, Edges
+           where Galaxies.time = Edges.time and
+           Galaxies.gid = Edges.gid1 and Edges.num > 3
+           emit Galaxies.time+1, Edges.gid2 as gid];
+        until convergence async build_EDB;
+        store(Galaxies, Galaxies);
+        """
+        lp = self.get_logical_plan(query, async_ft='REJOIN')
+        pp = self.logical_to_physical(lp, async_ft='REJOIN')
+        plan_gt = compile_to_json(query, lp, pp, 'myrial', async_ft='REJOIN')
+        idbs_gt = self.list_ops_in_json(plan_gt, 'IDBController')
+        self.assertEquals(idbs_gt[0], idbs[0])
 
     def test_push_select_below_shuffle(self):
         """Test pushing selections below shuffles."""
